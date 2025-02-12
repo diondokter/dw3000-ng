@@ -1610,6 +1610,30 @@ impl_register! {
     }
     0x18, 0xE8, 232, RO, DB_DIAG_SET2(db_diag_set2) { /// Double buffer diagnostic register set 2
     }
+    0x18, 0x00, 4, RO, DB_RX_FINFO_SET1(db_rx_finfo_set1) { /// RX Frame Information
+        rxflen,  0,  9, u16; /// Receive Frame Length
+        rxnspl, 11, 12, u8; /// Receive Non-Standard Preamble Length
+        rxbr,   13, 13, u8; /// Receive Bit Rate Report
+        rng,    15, 15, u8; /// Receiver Ranging
+        rxprf,  16, 17, u8; /// RX Pulse Repetition Rate Report
+        rxpsr,  18, 19, u8; /// RX Preamble Repetition
+        rxpacc, 20, 31, u16; /// Preamble Accumulation Count
+    }
+    0x18, 0xE8, 4, RO, DB_RX_FINFO_SET2(db_rx_finfo_set2) { /// RX Frame Information
+        rxflen,  0,  9, u16; /// Receive Frame Length
+        rxnspl, 11, 12, u8; /// Receive Non-Standard Preamble Length
+        rxbr,   13, 13, u8; /// Receive Bit Rate Report
+        rng,    15, 15, u8; /// Receiver Ranging
+        rxprf,  16, 17, u8; /// RX Pulse Repetition Rate Report
+        rxpsr,  18, 19, u8; /// RX Preamble Repetition
+        rxpacc, 20, 31, u16; /// Preamble Accumulation Count
+    }
+    0x18, 0x04, 5, RO, DB_RX_TIME_SET1(db_rx_time_set1) { /// Receive Time Stamp
+        rx_stamp,  0,  39, u64; /// Fully adjusted time stamp
+    }
+    0x18, 0xEC, 5, RO, DB_RX_TIME_SET2(db_rx_time_set2) { /// Receive Time Stamp
+        rx_stamp,  0,  39, u64; /// Fully adjusted time stamp
+    }
 
     /*******************************************************************/
     /*****************     INDIRECT_PTR_A REGISTER    ******************/

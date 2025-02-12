@@ -79,7 +79,7 @@ where
             self.ll
                 .sys_cfg()
                 .modify(
-                    |_, w| w.ffen(0b1), // enable frame filtering
+                    |_, w| w.ffen(0b1).dis_drxb((!RECEIVING::DOUBLE_BUFFERED) as u8), // enable frame filtering
                 )
                 .await?;
             self.ll
@@ -94,7 +94,10 @@ where
                 )
                 .await?;
         } else {
-            self.ll.sys_cfg().modify(|_, w| w.ffen(0b0)).await?; // disable frame filtering
+            self.ll
+                .sys_cfg()
+                .modify(|_, w| w.ffen(0b0).dis_drxb((!RECEIVING::DOUBLE_BUFFERED) as u8))
+                .await?; // disable frame filtering
         }
 
         match recv_time {
@@ -139,131 +142,9 @@ where
         &mut self,
         buffer: &'b mut [u8],
     ) -> nb::Result<Message<'b>, Error<SPI>> {
-        // ATTENTION:
-        // If you're changing anything about which SYS_STATUS flags are being
-        // checked in this method, also make sure to update `enable_interrupts`.
-        let sys_status = self
-            .ll()
-            .sys_status()
-            .read()
-            .await
-            .map_err(|error| nb::Error::Other(Error::Spi(error)))?;
+        let (len, rx_time, rx_quality) = self.r_wait_buf(buffer).await?;
 
-        // Is a frame ready?
-        if sys_status.rxfcg() == 0b0 {
-            // No frame ready. Check for errors.
-            if sys_status.rxfce() == 0b1 {
-                return Err(nb::Error::Other(Error::Fcs));
-            }
-            if sys_status.rxphe() == 0b1 {
-                return Err(nb::Error::Other(Error::Phy));
-            }
-            if sys_status.rxfsl() == 0b1 {
-                return Err(nb::Error::Other(Error::ReedSolomon));
-            }
-            if sys_status.rxsto() == 0b1 {
-                return Err(nb::Error::Other(Error::SfdTimeout));
-            }
-            if sys_status.arfe() == 0b1 {
-                return Err(nb::Error::Other(Error::FrameFilteringRejection));
-            }
-            if sys_status.rxfto() == 0b1 {
-                return Err(nb::Error::Other(Error::FrameWaitTimeout));
-            }
-            if sys_status.rxovrr() == 0b1 {
-                return Err(nb::Error::Other(Error::Overrun));
-            }
-            if sys_status.rxpto() == 0b1 {
-                return Err(nb::Error::Other(Error::PreambleDetectionTimeout));
-            }
-
-            // Some error flags that sound like valid errors aren't checked here,
-            // because experience has shown that they seem to occur spuriously
-            // without preventing a good frame from being received. Those are:
-            // - LDEERR: Leading Edge Detection Processing Error
-            // - RXPREJ: Receiver Preamble Rejection
-
-            // No errors detected. That must mean the frame is just not ready yet.
-            return Err(nb::Error::WouldBlock);
-        }
-
-        // Frame is ready. Continue.
-
-        // Wait until LDE processing is done. Before this is finished, the RX
-        // time stamp is not available.
-        let rx_time = self
-            .ll()
-            .rx_time()
-            .read()
-            .await
-            .map_err(|error| nb::Error::Other(Error::Spi(error)))?
-            .rx_stamp();
-
-        // `rx_time` comes directly from the register, which should always
-        // contain a 40-bit timestamp. Unless the hardware or its documentation
-        // are buggy, the following should never panic.
-        let rx_time = Instant::new(rx_time).unwrap();
-
-        let rssi = self.get_first_path_signal_power().await?;
-        let rx_quality = RxQuality {
-            los_confidence_level: 1.0, // TODO
-            rssi,
-        };
-
-        // Reset status bits. This is not strictly necessary, but it helps, if
-        // you have to inspect SYS_STATUS manually during debugging.
-        // NOTE: The `SYS_STATUS` register is write-to-clear
-        self.ll()
-            .sys_status()
-            .write(|w| {
-                w.rxprd(0b1) // Receiver Preamble Detected
-                    .rxsfdd(0b1) // Receiver SFD Detected
-                    .ciadone(0b1) // LDE Processing Done
-                    .rxphd(0b1) // Receiver PHY Header Detected
-                    .rxphe(0b1) // Receiver PHY Header Error
-                    .rxfr(0b1) // Receiver Data Frame Ready
-                    .rxfcg(0b1) // Receiver FCS Good
-                    .rxfce(0b1) // Receiver FCS Error
-                    .rxfsl(0b1) // Receiver Reed Solomon Frame Sync Loss
-                    .rxfto(0b1) // Receiver Frame Wait Timeout
-                    .ciaerr(0b1) // Leading Edge Detection Processing Error
-                    .rxovrr(0b1) // Receiver Overrun
-                    .rxpto(0b1) // Preamble Detection Timeout
-                    .rxsto(0b1) // Receiver SFD Timeout
-                    .rxprej(0b1) // Receiver Preamble Rejection
-            })
-            .await
-            .map_err(|error| nb::Error::Other(Error::Spi(error)))?;
-
-        // Read received frame
-        let rx_finfo = self
-            .ll()
-            .rx_finfo()
-            .read()
-            .await
-            .map_err(|error| nb::Error::Other(Error::Spi(error)))?;
-        let rx_buffer = self
-            .ll()
-            .rx_buffer_0()
-            .read()
-            .await
-            .map_err(|error| nb::Error::Other(Error::Spi(error)))?;
-
-        let len = rx_finfo.rxflen() as usize;
-
-        if buffer.len() < len {
-            return Err(nb::Error::Other(Error::BufferTooSmall {
-                required_len: len,
-            }));
-        }
-
-        buffer[..len].copy_from_slice(&rx_buffer.data()[..len]);
-
-        let buffer = &buffer[..len];
-
-        self.state.mark_finished();
-
-        let frame = Ieee802154Frame::new_checked(buffer).map_err(|_| {
+        let frame = Ieee802154Frame::new_checked(&buffer[..len]).map_err(|_| {
             nb::Error::Other(Error::Frame(byte::Error::BadInput {
                 err: "Cannot decode 802.15.4 frame",
             }))
@@ -304,7 +185,7 @@ where
             .map_err(|error| nb::Error::Other(Error::Spi(error)))?;
 
         // Is a frame ready?
-        if sys_status.rxfcg() == 0b0 {
+        if sys_status.rxfr() == 0b1 {
             // No frame ready. Check for errors.
             if sys_status.rxfce() == 0b1 {
                 return Err(nb::Error::Other(Error::Fcs));
@@ -339,6 +220,12 @@ where
 
             // No errors detected. That must mean the frame is just not ready yet.
             return Err(nb::Error::WouldBlock);
+        }
+
+        if RECEIVING::DOUBLE_BUFFERED {
+            
+        } else {
+
         }
 
         // Frame is ready. Continue.
@@ -413,6 +300,11 @@ where
         buffer[..len].copy_from_slice(&rx_buffer.data()[..len]);
 
         self.state.mark_finished();
+
+        if RECEIVING::DOUBLE_BUFFERED {
+            // Restart the receiver
+            self.fast_cmd(FastCommand::CMD_RX).await?
+        }
 
         Ok((len, rx_time, rx_quality))
     }

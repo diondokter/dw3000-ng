@@ -63,9 +63,6 @@ impl Asleep for Sleeping {}
 
 /// Any state struct that implements this trait shares a number of rx operations
 pub trait Receiving: Awake {
-    /// When true, the radio will re-enable the receive operation after it has
-    /// received a message
-    const AUTO_RX_REENABLE: bool;
     /// When true, the radio will use both receive buffers.
     /// This can help decrease the downtime between receiving messages.
     const DOUBLE_BUFFERED: bool;
@@ -79,7 +76,6 @@ pub trait Receiving: Awake {
 }
 
 impl Receiving for SingleBufferReceiving {
-    const AUTO_RX_REENABLE: bool = false;
     const DOUBLE_BUFFERED: bool = false;
 
     fn mark_finished(&mut self) {
@@ -96,7 +92,6 @@ impl Receiving for SingleBufferReceiving {
 }
 
 impl Receiving for AutoDoubleBufferReceiving {
-    const AUTO_RX_REENABLE: bool = true;
     const DOUBLE_BUFFERED: bool = true;
 
     fn mark_finished(&mut self) {
